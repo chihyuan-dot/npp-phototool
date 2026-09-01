@@ -249,6 +249,14 @@
           <input type="range" id="sZoom" min="1" max="3" step="0.01" value="1">
           <div class="axis"><span>全圖</span><span>放大後拖曳照片調整位置</span></div>
         </div>
+        <div class="srow">
+          <div class="lr">
+            <span>拉水平（自動裁掉斜邊）</span>
+            <span><button class="inline-reset" id="btnRotReset">重設</button><span class="val" id="vRot">0.0°</span></span>
+          </div>
+          <input type="range" id="sRot" min="-15" max="15" step="0.1" value="0">
+          <div class="axis"><span>⟲ 往左轉</span><span>往右轉 ⟳</span></div>
+        </div>
       </div>
       <div class="strip-label"><span>底片風格</span><small>點一下套用．再點「原圖」取消</small></div>
       <div class="strip" id="strip"></div>
@@ -415,13 +423,21 @@ precision highp float; precision highp sampler3D;
 in vec2 vUv; out vec4 outC;
 uniform sampler2D uImg; uniform sampler3D uLut;
 uniform float uEv,uTemp,uTint,uCon,uSat,uStr,uFlip;
-uniform vec2 uUvScale;
-uniform vec2 uCropOff;
-uniform vec2 uCropScale;
+uniform vec2 uOutOff;
+uniform vec2 uOutScale;
+uniform vec2 uCropCenter;
+uniform float uCropK;
+uniform vec2 uRot;
+uniform float uAspect;
 const float LS=${LUT_N}.0;
 void main(){
-  vec2 uv = vec2(vUv.x, uFlip>0.5 ? 1.0-vUv.y : vUv.y) * uUvScale;
-  uv = uCropOff + uv * uCropScale;
+  vec2 ov = vec2(vUv.x, uFlip>0.5 ? 1.0-vUv.y : vUv.y);
+  ov = uOutOff + ov * uOutScale;
+  vec2 q = (ov - 0.5) * uCropK;
+  vec2 p = vec2(q.x * uAspect, q.y);
+  p = vec2(p.x*uRot.x - p.y*uRot.y, p.x*uRot.y + p.y*uRot.x);
+  q = vec2(p.x / uAspect, p.y);
+  vec2 uv = uCropCenter + q;
   vec3 c = texture(uImg, uv).rgb;
   vec3 lin = pow(max(c,vec3(0.0)), vec3(2.2));
   lin *= exp2(uEv);
@@ -463,7 +479,7 @@ class GLR {
     gl.enableVertexAttribArray(loc);
     gl.vertexAttribPointer(loc, 2, gl.FLOAT, false, 0, 0);
     this.u = {};
-    for (const n of ['uImg', 'uLut', 'uEv', 'uTemp', 'uTint', 'uCon', 'uSat', 'uStr', 'uFlip', 'uUvScale', 'uCropOff', 'uCropScale'])
+    for (const n of ['uImg', 'uLut', 'uEv', 'uTemp', 'uTint', 'uCon', 'uSat', 'uStr', 'uFlip', 'uOutOff', 'uOutScale', 'uCropCenter', 'uCropK', 'uRot', 'uAspect'])
       this.u[n] = gl.getUniformLocation(prog, n);
     gl.uniform1i(this.u.uImg, 0);
     gl.uniform1i(this.u.uLut, 1);
@@ -530,9 +546,13 @@ class GLR {
     gl.uniform1f(this.u.uSat, p.sat);
     gl.uniform1f(this.u.uStr, p.str);
     gl.uniform1f(this.u.uFlip, o.flip);
-    gl.uniform2f(this.u.uUvScale, o.uvScale ? o.uvScale[0] : 1, o.uvScale ? o.uvScale[1] : 1);
-    gl.uniform2f(this.u.uCropOff, o.cropOff ? o.cropOff[0] : 0, o.cropOff ? o.cropOff[1] : 0);
-    gl.uniform2f(this.u.uCropScale, o.cropScale ? o.cropScale[0] : 1, o.cropScale ? o.cropScale[1] : 1);
+    gl.uniform2f(this.u.uOutOff, o.outOff ? o.outOff[0] : 0, o.outOff ? o.outOff[1] : 0);
+    gl.uniform2f(this.u.uOutScale, o.outScale ? o.outScale[0] : 1, o.outScale ? o.outScale[1] : 1);
+    gl.uniform2f(this.u.uCropCenter, o.cropCenter ? o.cropCenter[0] : 0.5, o.cropCenter ? o.cropCenter[1] : 0.5);
+    gl.uniform1f(this.u.uCropK, o.cropK !== undefined ? o.cropK : 1);
+    const rad = -((o.rotDeg || 0) * Math.PI / 180); /* 正值＝順時針 */
+    gl.uniform2f(this.u.uRot, Math.cos(rad), Math.sin(rad));
+    gl.uniform1f(this.u.uAspect, o.aspect || 1);
     gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
   }
 }
@@ -544,6 +564,7 @@ const state = {
   preset: null,
   params: { ev: 0, temp: 0, tint: 0, con: 0, sat: 0, str: 0.3 },
   crop: { z: 1, cx: 0.5, cy: 0.5 },
+  rot: 0,
   guide: { ev: false, temp: false, adv: false },
 };
 let view = null, work = null, downloadsCap = undefined;
@@ -576,34 +597,42 @@ function ensureLut(glr) {
   else glr.useLut('__id');
 }
 
-/* ---------- 裁切（鎖定原始比例＝縮放＋平移） ---------- */
-function cropRect() {
+/* ---------- 構圖（鎖定原始比例）：縮放＋平移＋拉水平（自動裁掉斜邊） ---------- */
+function cropGeom() {
   const W = state.img.naturalWidth, H = state.img.naturalHeight;
-  const z = state.crop.z, w = W / z, h = H / z;
-  const x = Math.min(Math.max(state.crop.cx * W - w / 2, 0), W - w);
-  const y = Math.min(Math.max(state.crop.cy * H - h / 2, 0), H - h);
-  return { x, y, w, h };
+  const th = Math.abs(state.rot) * Math.PI / 180;
+  const c = Math.cos(th), s = Math.sin(th);
+  const A = Math.max(W / H, H / W);
+  const fit = 1 / (c + s * A);          /* 轉斜後還塞得進原圖的最大同比例矩形 */
+  const K = fit / state.crop.z;
+  const cw = W * K, ch = H * K;
+  const bw = cw * c + ch * s, bh = cw * s + ch * c;  /* 轉斜後裁切框的外框 */
+  const hx = Math.min(0.5, bw / 2 / W), hy = Math.min(0.5, bh / 2 / H);
+  const cx = Math.min(Math.max(state.crop.cx, hx), 1 - hx);
+  const cy = Math.min(Math.max(state.crop.cy, hy), 1 - hy);
+  return { K, cx, cy, outW: Math.max(1, Math.round(W * K)), outH: Math.max(1, Math.round(H * K)) };
 }
 function clampCropCenter() {
-  const half = 1 / (2 * state.crop.z);
-  state.crop.cx = Math.min(Math.max(state.crop.cx, half), 1 - half);
-  state.crop.cy = Math.min(Math.max(state.crop.cy, half), 1 - half);
+  const g = cropGeom();
+  state.crop.cx = g.cx; state.crop.cy = g.cy;
+}
+function framedNow() {
+  return state.crop.z > 1.001 || Math.abs(state.rot) > 0.05;
 }
 function updateCropUI() {
-  const zoomed = state.crop.z > 1.001;
-  $('stage').classList.toggle('cropping', zoomed);
-  $('stageHint').textContent = zoomed ? '拖曳調整構圖．按住比對原圖' : '按住畫面可比對原圖';
+  const framed = framedNow();
+  $('stage').classList.toggle('cropping', framed);
+  $('stageHint').textContent = framed ? '拖曳調整構圖．按住比對原圖' : '按住畫面可比對原圖';
 }
 
 function renderPreview(showOriginal = false) {
   if (!view || !state.previewSrc) return;
   ensureLut(view);
-  const r = cropRect();
-  const W = state.img.naturalWidth, H = state.img.naturalHeight;
+  const g = cropGeom();
   view.draw(glParams(showOriginal), {
     w: state.previewSrc.width, h: state.previewSrc.height, flip: 1,
-    cropOff: [r.x / W, r.y / H],
-    cropScale: [1 / state.crop.z, 1 / state.crop.z],
+    cropCenter: [g.cx, g.cy], cropK: g.K, rotDeg: state.rot,
+    aspect: state.img.naturalWidth / state.img.naturalHeight,
   });
 }
 let renderQueued = false, lastRender = 0;
@@ -689,6 +718,8 @@ function loadPhoto(fileOrBlob, name) {
     state.preset = null;
     Object.assign(state.params, { ev: 0, temp: 0, tint: 0, con: 0, sat: 0, str: 0.3 });
     state.crop = { z: 1, cx: 0.5, cy: 0.5 };
+    state.rot = 0;
+    $('sRot').value = 0; $('vRot').textContent = '0.0°';
     state.guide = { ev: false, temp: false, adv: false };
     updateCropUI();
     applyGuide();
@@ -716,11 +747,10 @@ function loadPhoto(fileOrBlob, name) {
 function updateMeta() {
   if (!state.img) return;
   const w = state.img.naturalWidth, h = state.img.naturalHeight;
-  const r = cropRect();
-  const cw = Math.round(r.w), ch = Math.round(r.h);
-  const sizeTxt = state.crop.z <= 1.001
+  const g = cropGeom();
+  const sizeTxt = !framedNow()
     ? `<b>${w}×${h}</b> · 輸出相同尺寸`
-    : `<b>${cw}×${ch}</b> · 已裁切（原 ${w}×${h}）`;
+    : `<b>${g.outW}×${g.outH}</b> · 已裁切（原 ${w}×${h}）`;
   const pname = state.preset ? `${state.preset.id} ${ZH_NAMES[state.preset.id] || ''}` : '未套濾鏡';
   $('exportMeta').innerHTML = `${sizeTxt}<br>${pname}`;
 }
@@ -782,8 +812,8 @@ function toBlobP(cv, q) { return new Promise(res => cv.toBlob(res, 'image/jpeg',
 
 async function renderFull(maxEdge) {
   const img = state.img;
-  const rc = cropRect();
-  let W = Math.max(1, Math.round(rc.w)), H = Math.max(1, Math.round(rc.h)), scaled = false;
+  const g = cropGeom();
+  let W = g.outW, H = g.outH, scaled = false;
   if (maxEdge && Math.max(W, H) > maxEdge) {
     const k = maxEdge / Math.max(W, H);
     W = Math.round(W * k); H = Math.round(H * k); scaled = true;
@@ -792,23 +822,23 @@ async function renderFull(maxEdge) {
   out.width = W; out.height = H;
   const octx = out.getContext('2d');
   if (!octx) throw new Error('canvas-alloc');
-  const TILE = 2048;
-  const tileCv = document.createElement('canvas');
-  tileCv.width = TILE; tileCv.height = TILE;
-  const tctx = tileCv.getContext('2d');
-  tctx.imageSmoothingQuality = 'high';
+  /* 整張圖上傳給繪圖引擎（超過顯卡上限才縮），旋轉取樣需要看得到全圖 */
+  const srcCv = scaleCanvas(img, Math.min(work.maxTex, Math.max(img.naturalWidth, img.naturalHeight)));
+  work.setImage(srcCv);
   ensureLut(work);
   const p = glParams(false);
+  const aspect = img.naturalWidth / img.naturalHeight;
+  const TILE = 2048;
   const cols = Math.ceil(W / TILE), rows = Math.ceil(H / TILE), total = cols * rows;
   let done = 0;
-  const sx = rc.w / W, sy = rc.h / H;
   for (let y0 = 0; y0 < H; y0 += TILE) {
     for (let x0 = 0; x0 < W; x0 += TILE) {
       const tw = Math.min(TILE, W - x0), th = Math.min(TILE, H - y0);
-      tctx.clearRect(0, 0, TILE, TILE);
-      tctx.drawImage(img, rc.x + x0 * sx, rc.y + y0 * sy, tw * sx, th * sy, 0, 0, tw, th);
-      work.setImage(tileCv);
-      work.draw(p, { w: tw, h: th, flip: 0, uvScale: [tw / TILE, th / TILE] });
+      work.draw(p, {
+        w: tw, h: th, flip: 0,
+        cropCenter: [g.cx, g.cy], cropK: g.K, rotDeg: state.rot, aspect,
+        outOff: [x0 / W, y0 / H], outScale: [tw / W, th / H],
+      });
       const gl = work.gl;
       const buf = new Uint8Array(tw * th * 4);
       gl.readPixels(0, 0, tw, th, gl.RGBA, gl.UNSIGNED_BYTE, buf);
@@ -834,7 +864,7 @@ async function doExport() {
     let q = 0.95;
     let blob = await toBlobP(result.out, q);
     if (!blob) throw new Error('encode');
-    const fname = `${state.name}-npp${state.preset ? '-' + state.preset.id : ''}${state.crop.z > 1.001 ? '-crop' : ''}.jpg`;
+    const fname = `${state.name}-npp${state.preset ? '-' + state.preset.id : ''}${framedNow() ? '-crop' : ''}.jpg`;
     if (downloadsCap === undefined) downloadsCap = null; /* 保險 */
     if (downloadsCap) {
       while (blob.size > 16 * 1024 * 1024 && q > 0.84) {
@@ -955,7 +985,7 @@ function init() {
   });
   stage.addEventListener('pointermove', e => {
     if (!pDown || !state.img) return;
-    if (state.crop.z <= 1.001) return; /* 沒放大就沒得拖 */
+    if (!framedNow()) return; /* 沒放大也沒轉斜，就沒得拖 */
     if (!pMoved) {
       if (Math.abs(e.clientX - panX) + Math.abs(e.clientY - panY) < 7) return;
       pMoved = true;
@@ -995,6 +1025,21 @@ function init() {
     $('vZoom').textContent = state.crop.z.toFixed(2) + '×';
     updateCropUI(); scheduleRender(); updateMeta();
   });
+
+  /* 拉水平 */
+  const setRot = v => {
+    state.rot = v;
+    $('sRot').value = v;
+    $('vRot').textContent = (v > 0 ? '+' : '') + v.toFixed(1) + '°';
+    clampCropCenter();
+    updateCropUI(); scheduleRender(); updateMeta();
+  };
+  $('btnRotReset').addEventListener('click', () => setRot(0));
+  document.addEventListener('input', e => {
+    if (e.target.id !== 'sRot') return;
+    setRot(parseFloat(e.target.value));
+  });
+  $('sRot').closest('.srow').addEventListener('dblclick', () => setRot(0));
 
   /* 桌機拖放 */
   const empty = $('empty');
