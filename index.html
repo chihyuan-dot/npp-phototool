@@ -33,7 +33,8 @@
   .app{max-width:1100px;margin:0 auto;padding:0 14px 130px}
   header.top{display:flex;align-items:baseline;gap:10px;padding:16px 2px 10px;flex-wrap:wrap}
   .wordmark{font:500 12px var(--mono);letter-spacing:.22em;color:var(--accent)}
-  header.top h1{font-size:17px;font-weight:700;letter-spacing:.02em}
+  header.top h1{font-size:17px;font-weight:700;letter-spacing:.02em;cursor:pointer}
+  header.top h1:hover{color:var(--accent)}
   .badge-int{font:11px var(--mono);border:1px solid var(--line);color:var(--muted);padding:1px 7px;border-radius:4px;margin-left:auto}
 
   /* ---- empty state ---- */
@@ -213,7 +214,7 @@
 
 <div class="app">
   <header class="top">
-    <h1>時力修圖台</h1>
+    <h1 id="homeLink" title="回到首頁">時力修圖台</h1>
     <span class="badge-int">內部工具</span>
   </header>
 
@@ -892,6 +893,14 @@ function init() {
 
   $('btnPick').addEventListener('click', () => $('file').click());
   $('btnChange').addEventListener('click', () => $('file').click());
+  $('homeLink').addEventListener('click', () => {
+    state.img = null; state.previewSrc = null; state.thumbSrc = null; state.preset = null;
+    $('editor').classList.remove('on');
+    $('exportbar').classList.remove('on');
+    $('modal').classList.remove('on');
+    $('empty').style.display = '';
+    window.scrollTo(0, 0);
+  });
   $('file').addEventListener('change', e => {
     const f = e.target.files && e.target.files[0];
     if (f) loadPhoto(f, f.name);
