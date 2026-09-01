@@ -177,10 +177,34 @@
   .err-block{margin-top:14px;background:rgba(217,112,86,.1);border:1px solid rgba(217,112,86,.4);border-radius:12px;padding:14px 16px;font-size:13.5px;display:none}
   @media (prefers-reduced-motion:reduce){*{transition:none!important}}
 
-  @media (min-width:940px){
+  /* ---- RWD（斷點對齊台灣前進網站規則：980 / 768 / 640 / 480） ---- */
+  /* 平板直向（768–979）：單欄置中、不撐滿，縮圖加大好點選 */
+  @media (min-width:768px) and (max-width:979px){
+    .app{max-width:760px}
+    .pcard{width:116px}
+    .pcard canvas{height:86px}
+    #view{max-height:52vh}
+    .exportbar .inner{max-width:760px}
+  }
+  /* 桌機與平板橫向（≥980）：雙欄，右側控制列跟著捲動 */
+  @media (min-width:980px){
     .editor.on{display:grid;grid-template-columns:minmax(0,1fr) 330px;gap:18px;align-items:start}
     #view{max-height:70vh}
     .right{position:sticky;top:14px}
+  }
+  /* 中小手機（≤640）：留白收緊 */
+  @media (max-width:640px){
+    .empty{padding:44px 16px}
+    .panel{padding:14px 14px}
+  }
+  /* 小手機（≤480）：輸出列與縮圖再縮，避免擠出畫面 */
+  @media (max-width:480px){
+    .app{padding:0 10px 130px}
+    .exportbar .inner{gap:10px}
+    .exportbar .meta{font-size:10.5px}
+    #btnExport{padding:12px 16px;font-size:14.5px}
+    .pcard{width:92px}
+    header.top h1{font-size:16px}
   }
 </style>
 </head>
