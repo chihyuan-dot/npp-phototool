@@ -207,6 +207,12 @@
     .pcard{width:92px}
     header.top h1{font-size:16px}
   }
+  /* 手機與平板直向：照片釘在畫面頂端，往下捲調滑桿時照片仍在眼前 */
+  @media (max-width:979px){
+    .left,.right{display:contents}
+    .stage{position:sticky;top:0;z-index:20;box-shadow:0 8px 22px rgba(0,0,0,.5)}
+    #view{max-height:42vh}
+  }
 </style>
 </head>
 <body>
