@@ -234,7 +234,7 @@
       <rect x="35" y="12" width="20" height="24" rx="2" fill="#8f8d86" opacity=".5"/>
     </svg>
     <h2>選一張照片開始</h2>
-    <p>iPhone 拍的照片直接選就可以。照片只會在你自己的手機或電腦裡處理，不會上傳到任何地方。</p>
+    <p>iPhone 拍的照片直接選就可以（HEIC 原生格式也支援，會自動轉檔）。照片只會在你自己的手機或電腦裡處理，不會上傳到任何地方。</p>
     <button class="btn btn-primary" id="btnPick">選擇照片</button>
   </section>
 
@@ -339,7 +339,7 @@
 <div class="overlay" id="overlay">
   <div class="ocard">
     <div class="pct" id="pct">0%</div>
-    <p>正在用原始尺寸輸出，畫質不打折，<br>請稍等幾秒鐘。</p>
+    <p id="ocardMsg">正在用原始尺寸輸出，畫質不打折，<br>請稍等幾秒鐘。</p>
   </div>
 </div>
 
@@ -711,8 +711,45 @@ function selectPreset(pid) {
   updateMeta();
 }
 
-/* ---------- 載入照片 ---------- */
+/* ---------- 載入照片（含 iPhone HEIC 自動轉檔） ---------- */
+function isHeicFile(f, name) {
+  const n = String(name || f.name || '').toLowerCase();
+  const t = String(f.type || '').toLowerCase();
+  return t.includes('heic') || t.includes('heif') || /\.(heic|heif)$/.test(n);
+}
+let heicLibLoading = null;
+function loadHeicLib() {
+  if (window.heic2any) return Promise.resolve();
+  if (heicLibLoading) return heicLibLoading;
+  heicLibLoading = new Promise((res, rej) => {
+    const s = document.createElement('script');
+    s.src = 'https://cdn.jsdelivr.net/npm/heic2any@0.0.4/dist/heic2any.min.js';
+    s.onload = () => res();
+    s.onerror = () => { heicLibLoading = null; rej(new Error('heic-lib-load')); };
+    document.head.appendChild(s);
+  });
+  return heicLibLoading;
+}
+async function convertHeicThenLoad(file, name) {
+  $('ocardMsg').innerHTML = '這是 iPhone 的 HEIC 原生格式，<br>正在自動轉檔，第一次會多花幾秒鐘。';
+  $('pct').textContent = '…';
+  $('overlay').classList.add('on');
+  try {
+    await loadHeicLib();
+    let out = await heic2any({ blob: file, toType: 'image/jpeg', quality: 1 });
+    if (Array.isArray(out)) out = out[0];
+    $('overlay').classList.remove('on');
+    loadPhotoDirect(out, String(name || file.name || 'photo').replace(/\.[^.]+$/, '') + '.jpg');
+  } catch (e) {
+    $('overlay').classList.remove('on');
+    toast('這個 HEIC 檔轉不過來。請在手機「照片」選這張 → 分享 → 儲存為檔案時選 JPG，再試一次。', 5200);
+  }
+}
 function loadPhoto(fileOrBlob, name) {
+  if (isHeicFile(fileOrBlob, name)) { convertHeicThenLoad(fileOrBlob, name); return; }
+  loadPhotoDirect(fileOrBlob, name);
+}
+function loadPhotoDirect(fileOrBlob, name) {
   const url = URL.createObjectURL(fileOrBlob);
   const img = new Image();
   img.onload = () => {
@@ -745,7 +782,7 @@ function loadPhoto(fileOrBlob, name) {
   };
   img.onerror = () => {
     URL.revokeObjectURL(url);
-    toast('這個檔案打不開。若是 HEIC 檔，請先從「照片」用分享傳成 JPG 再試一次。', 4200);
+    toast('這個檔案打不開，可能不是照片格式。請換一張試試。', 4200);
   };
   img.src = url;
 }
@@ -860,6 +897,7 @@ async function renderFull(maxEdge) {
 async function doExport() {
   if (!state.img || $('btnExport').disabled) return;
   $('btnExport').disabled = true;
+  $('ocardMsg').innerHTML = '正在用原始尺寸輸出，畫質不打折，<br>請稍等幾秒鐘。';
   $('overlay').classList.add('on');
   $('pct').textContent = '0%';
   try {
