@@ -214,6 +214,20 @@
     .stage{position:sticky;top:0;z-index:20;box-shadow:0 8px 22px rgba(0,0,0,.5)}
     #view{max-height:42vh}
   }
+  /* 手機橫放：照片固定在左邊、撐滿整個高度，右邊一欄捲動調整 */
+  @media (max-width:979px) and (orientation:landscape) and (max-height:600px){
+    body.editing .app{max-width:none;margin:0;padding-left:calc(100% - 330px);padding-right:calc(12px + env(safe-area-inset-right))}
+    body.editing .stage{
+      position:fixed;z-index:20;top:0;bottom:0;left:0;border-radius:0;box-shadow:none;
+      right:calc(330px + env(safe-area-inset-right));
+      padding-left:env(safe-area-inset-left);
+    }
+    body.editing #view{max-height:100%;max-width:100%}
+    /* 輸出列收進右欄底部，照片才能用滿整個高度 */
+    body.editing .exportbar{left:auto;width:calc(330px + env(safe-area-inset-right));padding-left:12px;border-left:1px solid var(--line)}
+    body.editing .exportbar .inner{gap:10px}
+    body.editing #btnExport{padding:11px 16px;font-size:14px}
+  }
 </style>
 </head>
 <body>
@@ -222,7 +236,7 @@
 <div class="app">
   <header class="top">
     <h1 id="homeLink" title="回到首頁">時力修圖台</h1>
-    <span class="ver" title="看到這個日期＝目前最新版">2026.10.20.2 版</span>
+    <span class="ver" title="看到這個日期＝目前最新版">2026.10.20.3 版</span>
     <span class="badge-int">內部工具</span>
   </header>
 
@@ -281,7 +295,7 @@
           <li>臉背光太暗→「陰影」往右；天空太白→「亮部」往左</li>
           <li>還不滿意，再開「進階調整」</li>
         </ol>
-        <p class="gtip">小技巧：滑桿快速點兩下＝回到預設值．要裁切就用照片下方的縮放列，隨時可用</p>
+        <p class="gtip">小技巧：調壞了就按該項右上角的「重設」．手機橫放，照片會放大到左半邊．要裁切就用照片下方的縮放列，隨時可用</p>
       </div>
       <div class="panel">
         <h3>調整</h3>
@@ -800,6 +814,7 @@ function loadPhotoDirect(fileOrBlob, name) {
     $('empty').style.display = 'none';
     $('editor').classList.add('on');
     $('exportbar').classList.add('on');
+    document.body.classList.add('editing');
     view.setImage(state.previewSrc);
     buildStrip();
     renderPreview();
@@ -1000,6 +1015,7 @@ function init() {
     state.img = null; state.previewSrc = null; state.thumbSrc = null; state.preset = null;
     $('editor').classList.remove('on');
     $('exportbar').classList.remove('on');
+    document.body.classList.remove('editing');
     $('modal').classList.remove('on');
     $('empty').style.display = '';
     window.scrollTo(0, 0);
@@ -1025,18 +1041,25 @@ function init() {
     try { localStorage.setItem('echrome_guide_off', '1'); } catch (e) {}
   });
 
-  /* 滑桿點兩下＝回預設值 */
+  /* 回預設值：每個滑桿右上角的「重設」鍵（手機點兩下不可靠，所以一定要有按鈕），電腦另可點兩下 */
+  const resetSlider = s => {
+    const inp = $(s.el);
+    if (inp.disabled) return;
+    state.params[s.key] = s.def;
+    inp.value = s.def;
+    $(s.val).textContent = s.fmt(s.def);
+    if (GUIDE_KEYS.includes(s.key)) markStep(s.key);
+    renderPreview();
+  };
   for (const s of SLIDERS) {
     const inp = $(s.el);
     const row = inp.closest('.srow') || inp;
-    row.addEventListener('dblclick', () => {
-      if (inp.disabled) return;
-      state.params[s.key] = s.def;
-      inp.value = s.def;
-      $(s.val).textContent = s.fmt(s.def);
-      if (GUIDE_KEYS.includes(s.key)) markStep(s.key);
-      renderPreview();
-    });
+    row.addEventListener('dblclick', () => resetSlider(s));
+    const val = $(s.val), wrap = document.createElement('span'), btn = document.createElement('button');
+    btn.type = 'button'; btn.className = 'inline-reset'; btn.textContent = '重設';
+    btn.addEventListener('click', () => resetSlider(s));
+    val.replaceWith(wrap);
+    wrap.append(btn, val);
   }
   $('sZoom').closest('.srow').addEventListener('dblclick', () => {
     state.crop = { z: 1, cx: 0.5, cy: 0.5 };
