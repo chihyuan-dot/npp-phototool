@@ -276,7 +276,7 @@
           <li>選一款底片風格：拍人建議 <b>EX02 暖紅 AGFA</b>（膚色最漂亮），強度已幫你設在 30%</li>
           <li>調「曝光」，把亮度調舒服</li>
           <li>再調「色溫」，把膚色調自然</li>
-          <li>還不滿意，再開「進階調整」</li>
+          <li>還不滿意，再開「進階調整」：臉背光太暗→「陰影」往右；天空太白→「亮部」往左</li>
         </ol>
         <p class="gtip">小技巧：滑桿快速點兩下＝回到預設值．要裁切就用照片下方的縮放列，隨時可用</p>
       </div>
@@ -301,6 +301,16 @@
         <div class="advwrap" id="advWrap">
           <button class="btn btn-ghost adv-btn" id="btnAdv" disabled>先調 ①曝光 ②色溫，之後可開進階調整</button>
           <div id="advRows" hidden>
+            <div class="srow">
+              <div class="lr"><span>陰影</span><span class="val" id="vSh">0</span></div>
+              <input type="range" id="sSh" min="-1" max="1" step="0.02" value="0">
+              <div class="axis"><span>暗處更暗</span><span>暗處提亮（臉背光救這裡）</span></div>
+            </div>
+            <div class="srow">
+              <div class="lr"><span>亮部</span><span class="val" id="vHi">0</span></div>
+              <input type="range" id="sHi" min="-1" max="1" step="0.02" value="0">
+              <div class="axis"><span>亮處壓暗（天空太白救這裡）</span><span>亮處更亮</span></div>
+            </div>
             <div class="srow">
               <div class="lr"><span>色調</span><span class="val" id="vTint">0</span></div>
               <input type="range" id="sTint" min="-1" max="1" step="0.02" value="0">
@@ -428,7 +438,7 @@ const FSH = `#version 300 es
 precision highp float; precision highp sampler3D;
 in vec2 vUv; out vec4 outC;
 uniform sampler2D uImg; uniform sampler3D uLut;
-uniform float uEv,uTemp,uTint,uCon,uSat,uStr,uFlip;
+uniform float uEv,uTemp,uTint,uCon,uSat,uStr,uFlip,uSh,uHi;
 uniform vec2 uOutOff;
 uniform vec2 uOutScale;
 uniform vec2 uCropCenter;
@@ -452,6 +462,13 @@ void main(){
   float l1 = dot(lin, vec3(0.2126,0.7152,0.0722));
   if(l1>1e-6) lin *= l0/l1;
   c = clamp(pow(max(lin,vec3(0.0)), vec3(1.0/2.2)), 0.0, 1.0);
+  /* 陰影／亮部：只動暗部或亮部的亮度曲線，純黑與純白固定不動 */
+  float L = dot(c, vec3(0.2126,0.7152,0.0722));
+  float iL = 1.0-L;
+  float aS = uSh > 0.0 ? 2.1*uSh : uSh;   /* 係數上限確保曲線不反轉 */
+  float aH = uHi < 0.0 ? 2.1*uHi : uHi;
+  float dL = aS*L*iL*iL*iL + aH*L*L*L*iL;
+  c = clamp(c + dL, 0.0, 1.0);
   vec3 graded = texture(uLut, c*((LS-1.0)/LS)+0.5/LS).rgb;
   c = mix(c, graded, uStr);
   c = (c-0.5)*(1.0+0.7*uCon)+0.5;
@@ -485,7 +502,7 @@ class GLR {
     gl.enableVertexAttribArray(loc);
     gl.vertexAttribPointer(loc, 2, gl.FLOAT, false, 0, 0);
     this.u = {};
-    for (const n of ['uImg', 'uLut', 'uEv', 'uTemp', 'uTint', 'uCon', 'uSat', 'uStr', 'uFlip', 'uOutOff', 'uOutScale', 'uCropCenter', 'uCropK', 'uRot', 'uAspect'])
+    for (const n of ['uImg', 'uLut', 'uEv', 'uTemp', 'uTint', 'uCon', 'uSat', 'uStr', 'uSh', 'uHi', 'uFlip', 'uOutOff', 'uOutScale', 'uCropCenter', 'uCropK', 'uRot', 'uAspect'])
       this.u[n] = gl.getUniformLocation(prog, n);
     gl.uniform1i(this.u.uImg, 0);
     gl.uniform1i(this.u.uLut, 1);
@@ -551,6 +568,8 @@ class GLR {
     gl.uniform1f(this.u.uCon, p.con);
     gl.uniform1f(this.u.uSat, p.sat);
     gl.uniform1f(this.u.uStr, p.str);
+    gl.uniform1f(this.u.uSh, p.sh || 0);
+    gl.uniform1f(this.u.uHi, p.hi || 0);
     gl.uniform1f(this.u.uFlip, o.flip);
     gl.uniform2f(this.u.uOutOff, o.outOff ? o.outOff[0] : 0, o.outOff ? o.outOff[1] : 0);
     gl.uniform2f(this.u.uOutScale, o.outScale ? o.outScale[0] : 1, o.outScale ? o.outScale[1] : 1);
@@ -564,11 +583,12 @@ class GLR {
 }
 
 /* ---------- 應用狀態 ---------- */
-const NEUTRAL = { ev: 0, temp: 0, tint: 0, con: 0, sat: 0, str: 0 };
+const NEUTRAL = { ev: 0, temp: 0, tint: 0, sh: 0, hi: 0, con: 0, sat: 0, str: 0 };
+const DEFAULTS = { ev: 0, temp: 0, tint: 0, sh: 0, hi: 0, con: 0, sat: 0, str: 0.3 };
 const state = {
   img: null, name: '', previewSrc: null, thumbSrc: null,
   preset: null,
-  params: { ev: 0, temp: 0, tint: 0, con: 0, sat: 0, str: 0.3 },
+  params: { ...DEFAULTS },
   crop: { z: 1, cx: 0.5, cy: 0.5 },
   rot: 0,
   guide: { ev: false, temp: false, adv: false },
@@ -577,7 +597,7 @@ let view = null, work = null, downloadsCap = undefined;
 
 function glParams(neutral) {
   const p = neutral ? NEUTRAL : state.params;
-  return { ev: p.ev, temp: p.temp, tint: p.tint, con: p.con, sat: p.sat,
+  return { ev: p.ev, temp: p.temp, tint: p.tint, sh: p.sh, hi: p.hi, con: p.con, sat: p.sat,
            str: (!neutral && state.preset) ? p.str : 0 };
 }
 
@@ -759,7 +779,7 @@ function loadPhotoDirect(fileOrBlob, name) {
     state.previewSrc = scaleCanvas(img, 1600);
     state.thumbSrc = scaleCanvas(img, 240);
     state.preset = null;
-    Object.assign(state.params, { ev: 0, temp: 0, tint: 0, con: 0, sat: 0, str: 0.3 });
+    Object.assign(state.params, DEFAULTS);
     state.crop = { z: 1, cx: 0.5, cy: 0.5 };
     state.rot = 0;
     $('sRot').value = 0; $('vRot').textContent = '0.0°';
@@ -803,6 +823,8 @@ const SLIDERS = [
   { el: 'sStr', key: 'str', val: 'vStr', def: 0.3, fmt: v => Math.round(v * 100) + '%' },
   { el: 'sEv', key: 'ev', val: 'vEv', def: 0, fmt: v => (v > 0 ? '+' : '') + v.toFixed(2) },
   { el: 'sTemp', key: 'temp', val: 'vTemp', def: 0, fmt: v => String(Math.round(v * 100)) },
+  { el: 'sSh', key: 'sh', val: 'vSh', def: 0, fmt: v => (v > 0 ? '+' : '') + Math.round(v * 100) },
+  { el: 'sHi', key: 'hi', val: 'vHi', def: 0, fmt: v => (v > 0 ? '+' : '') + Math.round(v * 100) },
   { el: 'sTint', key: 'tint', val: 'vTint', def: 0, fmt: v => String(Math.round(v * 100)) },
   { el: 'sCon', key: 'con', val: 'vCon', def: 0, fmt: v => String(Math.round(v * 100)) },
   { el: 'sSat', key: 'sat', val: 'vSat', def: 0, fmt: v => String(Math.round(v * 100)) },
@@ -845,7 +867,7 @@ function applyGuide() {
     const ready = g.ev && g.temp;
     btn.disabled = !ready;
     btn.textContent = ready
-      ? '還不滿意？開啟進階調整（色調・對比・飽和度）'
+      ? '還不滿意？開啟進階調整（陰影・亮部・色調・對比・飽和度）'
       : '先調 ①曝光 ②色溫，之後可開進階調整';
   }
 }
@@ -981,7 +1003,7 @@ function init() {
     e.target.value = '';
   });
   $('btnReset').addEventListener('click', () => {
-    Object.assign(state.params, { ev: 0, temp: 0, tint: 0, con: 0, sat: 0, str: 0.3 });
+    Object.assign(state.params, DEFAULTS);
     syncSliders(); renderPreview();
   });
 
