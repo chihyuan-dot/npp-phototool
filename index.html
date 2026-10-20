@@ -222,7 +222,7 @@
 <div class="app">
   <header class="top">
     <h1 id="homeLink" title="回到首頁">時力修圖台</h1>
-    <span class="ver" title="看到這個日期＝目前最新版">2026.10.20 版</span>
+    <span class="ver" title="看到這個日期＝目前最新版">2026.10.20.2 版</span>
     <span class="badge-int">內部工具</span>
   </header>
 
@@ -278,7 +278,8 @@
           <li>選一款底片風格：拍人建議 <b>EX02 暖紅 AGFA</b>（膚色最漂亮），強度已幫你設在 30%</li>
           <li>調「曝光」，把亮度調舒服</li>
           <li>再調「色溫」，把膚色調自然</li>
-          <li>還不滿意，再開「進階調整」：臉背光太暗→「陰影」往右；天空太白→「亮部」往左</li>
+          <li>臉背光太暗→「陰影」往右；天空太白→「亮部」往左</li>
+          <li>還不滿意，再開「進階調整」</li>
         </ol>
         <p class="gtip">小技巧：滑桿快速點兩下＝回到預設值．要裁切就用照片下方的縮放列，隨時可用</p>
       </div>
@@ -300,19 +301,21 @@
           <div class="axis"><span>冷</span><span>暖</span></div>
           <button class="skip" id="skipTemp">色溫剛好，不用調 →</button>
         </div>
+        <div class="srow locked" id="rowSh">
+          <div class="lr"><span><i class="chip">3</i>陰影</span><span class="val" id="vSh">0</span></div>
+          <input type="range" id="sSh" min="-1" max="1" step="0.02" value="0" disabled>
+          <div class="axis"><span>暗處更暗</span><span>暗處提亮（臉背光救這裡）</span></div>
+          <button class="skip" id="skipSh">臉不會太暗，不用調 →</button>
+        </div>
+        <div class="srow locked" id="rowHi">
+          <div class="lr"><span><i class="chip">4</i>亮部</span><span class="val" id="vHi">0</span></div>
+          <input type="range" id="sHi" min="-1" max="1" step="0.02" value="0" disabled>
+          <div class="axis"><span>亮處壓暗（天空太白救這裡）</span><span>亮處更亮</span></div>
+          <button class="skip" id="skipHi">亮處沒有過白，不用調 →</button>
+        </div>
         <div class="advwrap" id="advWrap">
-          <button class="btn btn-ghost adv-btn" id="btnAdv" disabled>先調 ①曝光 ②色溫，之後可開進階調整</button>
+          <button class="btn btn-ghost adv-btn" id="btnAdv" disabled>先完成 ①～④（不用調可按跳過），之後可開進階調整</button>
           <div id="advRows" hidden>
-            <div class="srow">
-              <div class="lr"><span>陰影</span><span class="val" id="vSh">0</span></div>
-              <input type="range" id="sSh" min="-1" max="1" step="0.02" value="0">
-              <div class="axis"><span>暗處更暗</span><span>暗處提亮（臉背光救這裡）</span></div>
-            </div>
-            <div class="srow">
-              <div class="lr"><span>亮部</span><span class="val" id="vHi">0</span></div>
-              <input type="range" id="sHi" min="-1" max="1" step="0.02" value="0">
-              <div class="axis"><span>亮處壓暗（天空太白救這裡）</span><span>亮處更亮</span></div>
-            </div>
             <div class="srow">
               <div class="lr"><span>色調</span><span class="val" id="vTint">0</span></div>
               <input type="range" id="sTint" min="-1" max="1" step="0.02" value="0">
@@ -593,8 +596,9 @@ const state = {
   params: { ...DEFAULTS },
   crop: { z: 1, cx: 0.5, cy: 0.5 },
   rot: 0,
-  guide: { ev: false, temp: false, adv: false },
+  guide: { ev: false, temp: false, sh: false, hi: false, adv: false },
 };
+const GUIDE_KEYS = ['ev', 'temp', 'sh', 'hi'];
 let view = null, work = null, downloadsCap = undefined;
 
 function glParams(neutral) {
@@ -785,7 +789,7 @@ function loadPhotoDirect(fileOrBlob, name) {
     state.crop = { z: 1, cx: 0.5, cy: 0.5 };
     state.rot = 0;
     $('sRot').value = 0; $('vRot').textContent = '0.0°';
-    state.guide = { ev: false, temp: false, adv: false };
+    state.guide = { ev: false, temp: false, sh: false, hi: false, adv: false };
     updateCropUI();
     applyGuide();
     let gOff = false;
@@ -842,23 +846,24 @@ for (const s of SLIDERS) {
     if (e.target.id !== s.el) return;
     state.params[s.key] = parseFloat(e.target.value);
     $(s.val).textContent = s.fmt(state.params[s.key]);
-    if (s.key === 'ev') markStep('ev');
-    if (s.key === 'temp') markStep('temp');
+    if (GUIDE_KEYS.includes(s.key)) markStep(s.key);
     scheduleRender();
   });
 }
 
-/* ---------- 引導流程：①曝光 → ②色溫 → 進階 ---------- */
+/* ---------- 引導流程：①曝光 → ②色溫 → ③陰影 → ④亮部 → 進階 ---------- */
 function markStep(k) {
   if (!state.guide[k]) { state.guide[k] = true; applyGuide(); }
 }
 function applyGuide() {
   const g = state.guide;
-  $('rowEv').classList.toggle('done', g.ev);
-  const tempLocked = !g.ev;
-  $('rowTemp').classList.toggle('locked', tempLocked);
-  $('rowTemp').classList.toggle('done', g.temp);
-  $('sTemp').disabled = tempLocked;
+  const steps = [['rowEv', 'sEv', 'ev'], ['rowTemp', 'sTemp', 'temp'], ['rowSh', 'sSh', 'sh'], ['rowHi', 'sHi', 'hi']];
+  steps.forEach(([row, inp, k], i) => {
+    const locked = i > 0 && !g[steps[i - 1][2]];  /* 前一步做完才解鎖 */
+    $(row).classList.toggle('locked', locked);
+    $(row).classList.toggle('done', g[k]);
+    $(inp).disabled = locked;
+  });
   const btn = $('btnAdv');
   if (g.adv) {
     btn.hidden = true;
@@ -866,11 +871,11 @@ function applyGuide() {
   } else {
     btn.hidden = false;
     $('advRows').hidden = true;
-    const ready = g.ev && g.temp;
+    const ready = GUIDE_KEYS.every(k => g[k]);
     btn.disabled = !ready;
     btn.textContent = ready
-      ? '還不滿意？開啟進階調整（陰影・亮部・色調・對比・飽和度）'
-      : '先調 ①曝光 ②色溫，之後可開進階調整';
+      ? '還不滿意？開啟進階調整（色調・對比・飽和度）'
+      : '先完成 ①～④（不用調可按跳過），之後可開進階調整';
   }
 }
 
@@ -1012,6 +1017,8 @@ function init() {
   /* 引導流程按鈕 */
   $('skipEv').addEventListener('click', () => markStep('ev'));
   $('skipTemp').addEventListener('click', () => markStep('temp'));
+  $('skipSh').addEventListener('click', () => markStep('sh'));
+  $('skipHi').addEventListener('click', () => markStep('hi'));
   $('btnAdv').addEventListener('click', () => { state.guide.adv = true; applyGuide(); });
   $('btnGuideClose').addEventListener('click', () => {
     $('guideBox').hidden = true;
@@ -1027,8 +1034,7 @@ function init() {
       state.params[s.key] = s.def;
       inp.value = s.def;
       $(s.val).textContent = s.fmt(s.def);
-      if (s.key === 'ev') markStep('ev');
-      if (s.key === 'temp') markStep('temp');
+      if (GUIDE_KEYS.includes(s.key)) markStep(s.key);
       renderPreview();
     });
   }
