@@ -632,6 +632,8 @@ const state = {
   guide: { ev: false, temp: false, sh: false, hi: false, adv: false },
 };
 const GUIDE_KEYS = ['ev', 'temp', 'sh', 'hi'];
+/* 版本：npp＝同仁版（引導防呆）；me＝志元自用版（滑桿全開、不顯示指南），由建置腳本在 <html> 標記 */
+const VARIANT = document.documentElement.dataset.variant || 'npp';
 let view = null, work = null, downloadsCap = undefined;
 
 function glParams(neutral) {
@@ -865,11 +867,12 @@ function loadPhotoDirect(fileOrBlob, name) {
     state.hiReady = false;
     resetView();
     $('sRot').value = 0; $('vRot').textContent = '0.0°';
-    state.guide = { ev: false, temp: false, sh: false, hi: false, adv: false };
+    const me = VARIANT === 'me';
+    state.guide = { ev: me, temp: me, sh: me, hi: me, adv: me };
     updateCropUI();
     applyGuide();
-    let gOff = false;
-    try { gOff = localStorage.getItem('echrome_guide_off') === '1'; } catch (e) {}
+    let gOff = me;
+    try { gOff = gOff || localStorage.getItem('echrome_guide_off') === '1'; } catch (e) {}
     $('guideBox').hidden = gOff;
     $('sZoom').value = 1; $('vZoom').textContent = '1.00×';
     syncSliders();
