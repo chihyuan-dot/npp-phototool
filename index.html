@@ -84,8 +84,10 @@
 
   /* ---- crop ---- */
   .cropbar{display:block;background:var(--panel);border-radius:12px;padding:8px 16px 14px;margin-top:8px}
-  .stage.cropping{touch-action:none}
-  .stage.cropping #view{cursor:grab}
+  .stage{touch-action:pan-y}  /* 雙指交給程式放大照片，不讓瀏覽器縮放整頁 */
+  .stage.cropping,.stage.zoomed{touch-action:none}
+  .stage.cropping #view,.stage.zoomed #view{cursor:grab}
+  .view-fit{position:absolute;top:10px;right:10px;z-index:2;background:rgba(0,0,0,.7);color:var(--text);border:1px solid rgba(255,255,255,.25);border-radius:8px;padding:6px 12px;font:13px var(--sans);cursor:pointer}
   .inline-reset{background:none;border:none;color:var(--muted);font-size:11.5px;cursor:pointer;text-decoration:underline;font-family:var(--sans);margin-right:12px;padding:0}
 
   /* ---- filmstrip ---- */
@@ -218,11 +220,12 @@
   @media (max-width:979px) and (orientation:landscape) and (max-height:600px){
     body.editing .app{max-width:none;margin:0;padding-left:calc(100% - 330px);padding-right:calc(12px + env(safe-area-inset-right))}
     body.editing .stage{
-      position:fixed;z-index:20;top:0;bottom:0;left:0;border-radius:0;box-shadow:none;
+      position:fixed;z-index:20;top:0;left:0;height:100vh;height:100svh;border-radius:0;box-shadow:none;
       right:calc(330px + env(safe-area-inset-right));
       padding-left:env(safe-area-inset-left);
     }
-    body.editing #view{max-height:100%;max-width:100%}
+    /* 手機瀏覽器（尤其 Safari）算不出百分比高度，照片會被切掉，所以直接用「螢幕可見高度」 */
+    body.editing #view{max-width:100%;max-height:100vh;max-height:100svh}
     /* 輸出列收進右欄底部，照片才能用滿整個高度 */
     body.editing .exportbar{left:auto;width:calc(330px + env(safe-area-inset-right));padding-left:12px;border-left:1px solid var(--line)}
     body.editing .exportbar .inner{gap:10px}
@@ -236,7 +239,7 @@
 <div class="app">
   <header class="top">
     <h1 id="homeLink" title="回到首頁">時力修圖台</h1>
-    <span class="ver" title="看到這個日期＝目前最新版">2026.10.20.3 版</span>
+    <span class="ver" title="看到這個日期＝目前最新版">2026.10.20.4 版</span>
     <span class="badge-int">內部工具</span>
   </header>
 
@@ -261,6 +264,7 @@
         <canvas id="view"></canvas>
         <span class="orig-badge" id="origBadge">原圖</span>
         <span class="stage-hint" id="stageHint">按住畫面可比對原圖</span>
+        <button class="view-fit" id="btnViewFit" type="button" hidden>看全圖</button>
       </div>
       <div class="cropbar" id="cropbar">
         <div class="srow">
@@ -564,10 +568,23 @@ class GLR {
     this.curLut = id;
   }
   setImage(src) {
+    if (!this.imgTex) this.imgTex = this.gl.createTexture();
+    this._upload(this.imgTex, src);
+  }
+  /* 放大細看用的高解析度版本（另存一張，縮回全圖時切回一般預覽，避免縮小取樣產生鋸齒） */
+  setHiImage(src) {
+    if (!this.hiTex) this.hiTex = this.gl.createTexture();
+    this._upload(this.hiTex, src);
+  }
+  bindImage(hi) {
     const gl = this.gl;
-    if (!this.imgTex) this.imgTex = gl.createTexture();
     gl.activeTexture(gl.TEXTURE0);
-    gl.bindTexture(gl.TEXTURE_2D, this.imgTex);
+    gl.bindTexture(gl.TEXTURE_2D, hi && this.hiTex ? this.hiTex : this.imgTex);
+  }
+  _upload(tex, src) {
+    const gl = this.gl;
+    gl.activeTexture(gl.TEXTURE0);
+    gl.bindTexture(gl.TEXTURE_2D, tex);
     gl.pixelStorei(gl.UNPACK_ALIGNMENT, 4);
     gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, src);
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
@@ -610,6 +627,8 @@ const state = {
   params: { ...DEFAULTS },
   crop: { z: 1, cx: 0.5, cy: 0.5 },
   rot: 0,
+  view: { z: 1, x: 0, y: 0 },  /* 雙指放大細看：只影響畫面，不影響輸出成品 */
+  hiReady: false,
   guide: { ev: false, temp: false, sh: false, hi: false, adv: false },
 };
 const GUIDE_KEYS = ['ev', 'temp', 'sh', 'hi'];
@@ -666,19 +685,60 @@ function framedNow() {
   return state.crop.z > 1.001 || Math.abs(state.rot) > 0.05;
 }
 function updateCropUI() {
-  const framed = framedNow();
-  $('stage').classList.toggle('cropping', framed);
-  $('stageHint').textContent = framed ? '拖曳調整構圖．按住比對原圖' : '按住畫面可比對原圖';
+  $('stage').classList.toggle('cropping', framedNow());
+  updateStageHint();
+}
+function updateStageHint() {
+  $('stageHint').textContent = state.view.z > 1 ? '單指拖曳看其他地方．兩指捏回去＝看全圖'
+    : framedNow() ? '拖曳調整構圖．按住比對原圖' : '按住比對原圖．兩指可放大細看';
+}
+
+/* ---------- 雙指放大細看（只放大畫面，成品照樣是整張） ---------- */
+function clampView() {
+  const v = state.view;
+  if (v.z < 1.02) { v.z = 1; v.x = 0; v.y = 0; return; }
+  const m = 1 - 1 / v.z;
+  v.x = Math.min(Math.max(v.x, 0), m);
+  v.y = Math.min(Math.max(v.y, 0), m);
+}
+/* 以畫面上 (mx,my) 這一點為中心縮放到 z 倍（mx,my 為 0–1 的畫面比例座標） */
+function zoomViewAt(z, mx, my, base) {
+  const v = state.view, b = base || { z: v.z, px: v.x + mx / v.z, py: v.y + my / v.z };
+  v.z = Math.min(6, Math.max(1, z));
+  v.x = b.px - mx / v.z;
+  v.y = b.py - my / v.z;
+  clampView();
+  if (v.z > 1.3 && !state.hiReady) {
+    /* 第一次放大才準備高解析度版本，放大後細節才清楚 */
+    view.setHiImage(scaleCanvas(state.img, Math.min(view.maxTex, 4096)));
+    state.hiReady = true;
+  }
+  updateViewUI();
+  scheduleRender();
+}
+function resetView() {
+  state.view = { z: 1, x: 0, y: 0 };
+  updateViewUI();
+}
+function updateViewUI() {
+  const z = state.view.z;
+  $('stage').classList.toggle('zoomed', z > 1);
+  const btn = $('btnViewFit');
+  btn.hidden = z <= 1;
+  btn.textContent = `${z.toFixed(1)}× · 點這裡看全圖`;
+  updateStageHint();
 }
 
 function renderPreview(showOriginal = false) {
   if (!view || !state.previewSrc) return;
   ensureLut(view);
-  const g = cropGeom();
+  const g = cropGeom(), v = state.view;
+  view.bindImage(v.z > 1.3 && state.hiReady);
   view.draw(glParams(showOriginal), {
     w: state.previewSrc.width, h: state.previewSrc.height, flip: 1,
     cropCenter: [g.cx, g.cy], cropK: g.K, rotDeg: state.rot,
     aspect: state.img.naturalWidth / state.img.naturalHeight,
+    outOff: [v.x, v.y], outScale: [1 / v.z, 1 / v.z],
   });
 }
 let renderQueued = false, lastRender = 0;
@@ -802,6 +862,8 @@ function loadPhotoDirect(fileOrBlob, name) {
     Object.assign(state.params, DEFAULTS);
     state.crop = { z: 1, cx: 0.5, cy: 0.5 };
     state.rot = 0;
+    state.hiReady = false;
+    resetView();
     $('sRot').value = 0; $('vRot').textContent = '0.0°';
     state.guide = { ev: false, temp: false, sh: false, hi: false, adv: false };
     updateCropUI();
@@ -1069,45 +1131,87 @@ function init() {
   $('btnExport').addEventListener('click', doExport);
   $('btnCloseModal').addEventListener('click', () => $('modal').classList.remove('on'));
 
-  /* 照片上的手勢：按住不動＝比對原圖；放大後拖曳＝調整構圖 */
+  /* 照片上的手勢：
+     按住不動＝比對原圖；兩指開合＝放大細看（不影響成品）；
+     放大細看時單指拖曳＝看其他地方；沒細看但已裁切時單指拖曳＝調整構圖 */
   const stage = $('stage');
-  let pDown = false, pMoved = false, panX = 0, panY = 0;
+  const ptrs = new Map();
+  let pinch = null, pMoved = false, panX = 0, panY = 0, origTimer = null, showingOrig = false;
+  const viewBox = () => $('view').getBoundingClientRect();
+  const startOrig = () => { showingOrig = true; $('origBadge').style.display = 'block'; renderPreview(true); };
+  const stopOrig = () => {
+    clearTimeout(origTimer); origTimer = null;
+    if (showingOrig) { showingOrig = false; $('origBadge').style.display = 'none'; renderPreview(false); }
+  };
+  const pinchInfo = () => {
+    const [a, b] = [...ptrs.values()], box = viewBox();
+    return { d: Math.max(1, Math.hypot(a.x - b.x, a.y - b.y)),
+             mx: ((a.x + b.x) / 2 - box.left) / box.width, my: ((a.y + b.y) / 2 - box.top) / box.height };
+  };
   stage.addEventListener('pointerdown', e => {
-    if (!state.img) return;
+    if (!state.img || e.target.closest('#btnViewFit')) return;
     e.preventDefault();
-    pDown = true; pMoved = false; panX = e.clientX; panY = e.clientY;
+    ptrs.set(e.pointerId, { x: e.clientX, y: e.clientY });
     try { stage.setPointerCapture(e.pointerId); } catch (err) {}
-    $('origBadge').style.display = 'block';
-    renderPreview(true);
+    if (ptrs.size === 1) {
+      pMoved = false; panX = e.clientX; panY = e.clientY;
+      origTimer = setTimeout(startOrig, 160); /* 稍等一下才顯示原圖，避免雙指放大時閃一下 */
+    } else if (ptrs.size === 2) {
+      stopOrig(); pMoved = true;
+      const i = pinchInfo(), v = state.view;
+      pinch = { d0: i.d, base: { z: v.z, px: v.x + i.mx / v.z, py: v.y + i.my / v.z } };
+    }
   });
   stage.addEventListener('pointermove', e => {
-    if (!pDown || !state.img) return;
-    if (!framedNow()) return; /* 沒放大也沒轉斜，就沒得拖 */
-    if (!pMoved) {
-      if (Math.abs(e.clientX - panX) + Math.abs(e.clientY - panY) < 7) return;
-      pMoved = true;
-      $('origBadge').style.display = 'none';
+    if (!state.img || !ptrs.has(e.pointerId)) return;
+    ptrs.set(e.pointerId, { x: e.clientX, y: e.clientY });
+    if (pinch && ptrs.size >= 2) {
+      const i = pinchInfo();
+      zoomViewAt(pinch.base.z * i.d / pinch.d0, i.mx, i.my, pinch.base);
+      return;
     }
-    const box = $('view').getBoundingClientRect();
+    if (ptrs.size !== 1) return;
+    const dx = e.clientX - panX, dy = e.clientY - panY;
+    if (!pMoved) {
+      if (Math.abs(dx) + Math.abs(dy) < 7) return;
+      pMoved = true;
+      stopOrig();
+    }
+    const box = viewBox();
     if (!box.width || !box.height) return;
-    const z = state.crop.z;
-    state.crop.cx -= (e.clientX - panX) / box.width / z;
-    state.crop.cy -= (e.clientY - panY) / box.height / z;
+    if (state.view.z > 1) {
+      state.view.x -= dx / box.width / state.view.z;
+      state.view.y -= dy / box.height / state.view.z;
+      clampView();
+    } else if (framedNow()) {
+      const z = state.crop.z;
+      state.crop.cx -= dx / box.width / z;
+      state.crop.cy -= dy / box.height / z;
+      clampCropCenter();
+    }
     panX = e.clientX; panY = e.clientY;
-    clampCropCenter();
     scheduleRender();
   });
-  const endPointer = () => {
-    if (!pDown) return;
-    pDown = false;
-    if (!state.img) return;
-    $('origBadge').style.display = 'none';
-    renderPreview(false);
+  const endPointer = e => {
+    if (!ptrs.delete(e.pointerId)) return;
+    if (ptrs.size < 2) pinch = null;
+    if (ptrs.size === 1) { const p = [...ptrs.values()][0]; panX = p.x; panY = p.y; }
+    if (ptrs.size === 0) stopOrig();
   };
   stage.addEventListener('pointerup', endPointer);
   stage.addEventListener('pointercancel', endPointer);
   stage.addEventListener('pointerleave', endPointer);
   stage.addEventListener('contextmenu', e => e.preventDefault());
+  stage.addEventListener('gesturestart', e => e.preventDefault()); /* 舊版 iPhone：不讓整頁跟著縮放 */
+  /* 電腦觸控板雙指縮放（瀏覽器會送 ctrl＋滾輪） */
+  stage.addEventListener('wheel', e => {
+    if (!state.img || !e.ctrlKey) return;
+    e.preventDefault();
+    const box = viewBox();
+    zoomViewAt(state.view.z * Math.exp(-e.deltaY * 0.01),
+               (e.clientX - box.left) / box.width, (e.clientY - box.top) / box.height);
+  }, { passive: false });
+  $('btnViewFit').addEventListener('click', () => { resetView(); renderPreview(); });
 
   /* 裁切控制（常駐） */
   $('btnCropReset').addEventListener('click', () => {
