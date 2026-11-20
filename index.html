@@ -246,7 +246,7 @@
 <div class="app">
   <header class="top">
     <h1 id="homeLink" title="回到首頁">時力修圖台</h1>
-    <span class="ver" title="看到這個日期＝目前最新版">2026.11.20 版</span>
+    <span class="ver" title="看到這個日期＝目前最新版">2026.11.20.2 版</span>
     <span class="badge-int">內部工具</span>
   </header>
 
@@ -1095,7 +1095,7 @@ async function doExport(small = false) {
     try { result = await renderFull(0, scale); }
     catch (e) { result = await renderFull(4096, scale); toast('這台裝置記憶體不夠，改用 4096 寬輸出', 3600); }
     $('pct').textContent = '90%';
-    let q = 0.95;
+    let q = 1.0; /* 最高品質：瀏覽器只有在 100% 時才把顏色存全解析度（4:4:4），跟 Lightroom 選 100 一樣 */
     let blob = await toBlobP(result.out, q);
     if (!blob) throw new Error('encode');
     const fname = `${state.name}${OPEN_MODE ? '' : '-npp'}${state.preset ? '-' + state.preset.id : ''}${framedNow() ? '-crop' : ''}${scale < 1 ? '-15MP' : ''}.jpg`;
