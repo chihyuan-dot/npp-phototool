@@ -411,7 +411,7 @@
 
 <script>
 /* ============================================================
-   時力修圖台
+   修圖台
    十款底片風格（Lightroom 色卡轉出的真實 LUT）＋引導式基礎調整＋等比例裁切
    全程在本機瀏覽器處理，輸出原尺寸 JPG
    ============================================================ */
@@ -1098,7 +1098,7 @@ async function doExport(small = false) {
     let q = 0.95;
     let blob = await toBlobP(result.out, q);
     if (!blob) throw new Error('encode');
-    const fname = `${state.name}-npp${state.preset ? '-' + state.preset.id : ''}${framedNow() ? '-crop' : ''}${scale < 1 ? '-15MP' : ''}.jpg`;
+    const fname = `${state.name}${OPEN_MODE ? '' : '-npp'}${state.preset ? '-' + state.preset.id : ''}${framedNow() ? '-crop' : ''}${scale < 1 ? '-15MP' : ''}.jpg`;
     if (downloadsCap === undefined) downloadsCap = null; /* 保險 */
     if (downloadsCap) {
       while (blob.size > 16 * 1024 * 1024 && q > 0.84) {
