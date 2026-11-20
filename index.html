@@ -159,6 +159,13 @@
   .ocard{background:var(--panel);border-radius:16px;padding:28px 32px;text-align:center;max-width:340px}
   .ocard .pct{font:500 30px var(--mono);color:var(--accent);margin-bottom:6px;font-variant-numeric:tabular-nums}
   .ocard p{font-size:13px;color:var(--muted)}
+  .size-card{max-width:380px;text-align:left;padding:22px 22px 16px}
+  .size-card h3{font-size:16px;margin-bottom:8px}
+  .size-card p{font-size:13.5px;line-height:1.7;margin-bottom:16px}
+  .size-card p b{color:var(--text);font-weight:500}
+  .size-btns{display:flex;flex-direction:column;gap:9px}
+  .size-btns .btn{width:100%;padding:12px 16px}
+  .size-btns .inline-reset{align-self:center;margin:4px 0 0;padding:6px 10px;font-size:13px}
   .modal{
     position:fixed;inset:0;z-index:70;background:rgba(10,10,12,.92);
     display:none;overflow-y:auto;padding:18px;
@@ -239,7 +246,7 @@
 <div class="app">
   <header class="top">
     <h1 id="homeLink" title="回到首頁">時力修圖台</h1>
-    <span class="ver" title="看到這個日期＝目前最新版">2026.10.20.4 版</span>
+    <span class="ver" title="看到這個日期＝目前最新版">2026.11.20 版</span>
     <span class="badge-int">內部工具</span>
   </header>
 
@@ -368,6 +375,19 @@
   </div>
 </div>
 
+<!-- 輸出尺寸選擇 -->
+<div class="overlay" id="sizeSheet">
+  <div class="ocard size-card" role="dialog" aria-labelledby="sizeTitle">
+    <h3 id="sizeTitle">要縮小檔案嗎？</h3>
+    <p id="sizeDesc"></p>
+    <div class="size-btns">
+      <button class="btn btn-primary" id="btnSizeSmall">縮小到約 1,500 萬畫素</button>
+      <button class="btn btn-ghost" id="btnSizeFull">原尺寸輸出</button>
+      <button class="inline-reset" id="btnSizeCancel">取消</button>
+    </div>
+  </div>
+</div>
+
 <!-- 處理中 -->
 <div class="overlay" id="overlay">
   <div class="ocard">
@@ -468,17 +488,35 @@ uniform vec2 uCropCenter;
 uniform float uCropK;
 uniform vec2 uRot;
 uniform float uAspect;
+uniform vec2 uPix;     /* 一個輸出像素在輸出座標中的大小 */
+uniform float uTaps;   /* 縮小輸出時每邊取樣幾點（1＝不多取） */
 const float LS=${LUT_N}.0;
-void main(){
-  vec2 ov = vec2(vUv.x, uFlip>0.5 ? 1.0-vUv.y : vUv.y);
-  ov = uOutOff + ov * uOutScale;
+vec3 sampleLin(vec2 ov){
   vec2 q = (ov - 0.5) * uCropK;
   vec2 p = vec2(q.x * uAspect, q.y);
   p = vec2(p.x*uRot.x - p.y*uRot.y, p.x*uRot.y + p.y*uRot.x);
   q = vec2(p.x / uAspect, p.y);
-  vec2 uv = uCropCenter + q;
-  vec3 c = texture(uImg, uv).rgb;
-  vec3 lin = pow(max(c,vec3(0.0)), vec3(2.2));
+  vec3 c = texture(uImg, uCropCenter + q).rgb;
+  return pow(max(c,vec3(0.0)), vec3(2.2));
+}
+void main(){
+  vec2 ov = vec2(vUv.x, uFlip>0.5 ? 1.0-vUv.y : vUv.y);
+  ov = uOutOff + ov * uOutScale;
+  vec3 lin;
+  if (uTaps < 1.5) lin = sampleLin(ov);
+  else {
+    /* 縮小時：在一個輸出像素周圍多點取樣、以帳篷形權重平均（在線性光下平均），避免細紋產生波紋 */
+    vec3 acc = vec3(0.0); float ws = 0.0;
+    for (int j = 0; j < 8; j++) { if (float(j) >= uTaps) break;
+      for (int i = 0; i < 8; i++) { if (float(i) >= uTaps) break;
+        vec2 t = (vec2(float(i), float(j)) + 0.5) / uTaps * 2.0 - 1.0;
+        float w = (1.0 - abs(t.x)) * (1.0 - abs(t.y));
+        acc += sampleLin(ov + uPix * t) * w; ws += w;
+      }
+    }
+    lin = acc / ws;
+  }
+  vec3 c;
   lin *= exp2(uEv);
   float l0 = dot(lin, vec3(0.2126,0.7152,0.0722));
   lin *= vec3(1.0+0.25*uTemp, 1.0-0.12*uTint, 1.0-0.25*uTemp);
@@ -525,7 +563,7 @@ class GLR {
     gl.enableVertexAttribArray(loc);
     gl.vertexAttribPointer(loc, 2, gl.FLOAT, false, 0, 0);
     this.u = {};
-    for (const n of ['uImg', 'uLut', 'uEv', 'uTemp', 'uTint', 'uCon', 'uSat', 'uStr', 'uSh', 'uHi', 'uFlip', 'uOutOff', 'uOutScale', 'uCropCenter', 'uCropK', 'uRot', 'uAspect'])
+    for (const n of ['uImg', 'uLut', 'uEv', 'uTemp', 'uTint', 'uCon', 'uSat', 'uStr', 'uSh', 'uHi', 'uFlip', 'uOutOff', 'uOutScale', 'uCropCenter', 'uCropK', 'uRot', 'uAspect', 'uPix', 'uTaps'])
       this.u[n] = gl.getUniformLocation(prog, n);
     gl.uniform1i(this.u.uImg, 0);
     gl.uniform1i(this.u.uLut, 1);
@@ -614,6 +652,8 @@ class GLR {
     const rad = -((o.rotDeg || 0) * Math.PI / 180); /* 正值＝順時針 */
     gl.uniform2f(this.u.uRot, Math.cos(rad), Math.sin(rad));
     gl.uniform1f(this.u.uAspect, o.aspect || 1);
+    gl.uniform2f(this.u.uPix, o.pix ? o.pix[0] : 0, o.pix ? o.pix[1] : 0);
+    gl.uniform1f(this.u.uTaps, o.taps || 1);
     gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
   }
 }
@@ -962,20 +1002,26 @@ function applyGuide() {
 /* ---------- 輸出（原尺寸、逐格處理） ---------- */
 function toBlobP(cv, q) { return new Promise(res => cv.toBlob(res, 'image/jpeg', q)); }
 
-async function renderFull(maxEdge) {
+/* 縮小輸出的目標：約 1,500 萬畫素 */
+const SMALL_PX = 15e6;
+function fmtMp(px) { return Math.round(px / 1e4).toLocaleString('zh-TW') + ' 萬'; }
+function smallScale(W, H) { return Math.min(1, Math.sqrt(SMALL_PX / (W * H))); }
+
+async function renderFull(maxEdge, scale = 1) {
   const img = state.img;
   const g = cropGeom();
-  let W = g.outW, H = g.outH, scaled = false;
-  if (maxEdge && Math.max(W, H) > maxEdge) {
-    const k = maxEdge / Math.max(W, H);
-    W = Math.round(W * k); H = Math.round(H * k); scaled = true;
-  }
+  let k = scale;
+  if (maxEdge && Math.max(g.outW, g.outH) * k > maxEdge) k = maxEdge / Math.max(g.outW, g.outH);
+  const W = Math.max(1, Math.round(g.outW * k)), H = Math.max(1, Math.round(g.outH * k));
+  const scaled = k < 1;
   const out = document.createElement('canvas');
   out.width = W; out.height = H;
   const octx = out.getContext('2d');
   if (!octx) throw new Error('canvas-alloc');
-  /* 整張圖上傳給繪圖引擎（超過顯卡上限才縮），旋轉取樣需要看得到全圖 */
+  /* 整張圖上傳給繪圖引擎（超過顯卡上限才縮），旋轉取樣需要看得到全圖。
+     縮小輸出不靠瀏覽器縮圖（實測會產生波紋），改由繪圖引擎多點取樣平均，縮越多取越多點 */
   const srcCv = scaleCanvas(img, Math.min(work.maxTex, Math.max(img.naturalWidth, img.naturalHeight)));
+  const taps = k >= 0.999 ? 1 : Math.min(8, 2 * Math.ceil(1 / k) + 2);
   work.setImage(srcCv);
   ensureLut(work);
   const p = glParams(false);
@@ -990,6 +1036,7 @@ async function renderFull(maxEdge) {
         w: tw, h: th, flip: 0,
         cropCenter: [g.cx, g.cy], cropK: g.K, rotDeg: state.rot, aspect,
         outOff: [x0 / W, y0 / H], outScale: [tw / W, th / H],
+        pix: [1 / W, 1 / H], taps,
       });
       const gl = work.gl;
       const buf = new Uint8Array(tw * th * 4);
@@ -1003,21 +1050,55 @@ async function renderFull(maxEdge) {
   return { out, scaled, W, H };
 }
 
-async function doExport() {
+/* 按「儲存成品」先問要不要縮小：超過 1,500 萬畫素才提供縮小，否則直接輸出 */
+function openSizeSheet() {
   if (!state.img || $('btnExport').disabled) return;
+  const g = cropGeom(), px = g.outW * g.outH;
+  const big = px > SMALL_PX;
+  if (big) {
+    const k = smallScale(g.outW, g.outH);
+    const sw = Math.round(g.outW * k), sh = Math.round(g.outH * k);
+    $('sizeTitle').textContent = '要縮小檔案嗎？';
+    $('sizeDesc').innerHTML =
+      `這張是 <b>${g.outW}×${g.outH}</b>，約 <b>${fmtMp(px)}畫素</b>。<br>` +
+      `縮小後是 <b>${sw}×${sh}</b>，約 ${fmtMp(sw * sh)}畫素，像素剩原本的 ${Math.round(sw * sh / px * 100)}%，檔案也跟著變小。` +
+      `發社群、新聞稿、一般印刷都看不出差別；只有放到很大看細節時，原尺寸會更清楚。`;
+    $('btnSizeSmall').hidden = false;
+    $('btnSizeSmall').textContent = `縮小到約 1,500 萬畫素（${sw}×${sh}）`;
+    $('btnSizeFull').className = 'btn btn-ghost';
+    $('btnSizeFull').textContent = `原尺寸輸出（${g.outW}×${g.outH}）`;
+  } else {
+    $('sizeTitle').textContent = '不用縮小';
+    $('sizeDesc').innerHTML =
+      `這張是 <b>${g.outW}×${g.outH}</b>，約 <b>${fmtMp(px)}畫素</b>，已經小於 1,500 萬，直接輸出就好。`;
+    $('btnSizeSmall').hidden = true;
+    $('btnSizeFull').className = 'btn btn-primary';
+    $('btnSizeFull').textContent = '直接輸出';
+  }
+  $('sizeSheet').classList.add('on');
+}
+function closeSizeSheet() { $('sizeSheet').classList.remove('on'); }
+
+async function doExport(small = false) {
+  if (!state.img || $('btnExport').disabled) return;
+  closeSizeSheet();
   $('btnExport').disabled = true;
-  $('ocardMsg').innerHTML = '正在用原始尺寸輸出，畫質不打折，<br>請稍等幾秒鐘。';
+  const g0 = cropGeom();
+  const scale = small ? smallScale(g0.outW, g0.outH) : 1;
+  $('ocardMsg').innerHTML = scale < 1
+    ? '正在縮小到約 1,500 萬畫素輸出，<br>請稍等幾秒鐘。'
+    : '正在用原始尺寸輸出，畫質不打折，<br>請稍等幾秒鐘。';
   $('overlay').classList.add('on');
   $('pct').textContent = '0%';
   try {
     let result;
-    try { result = await renderFull(0); }
-    catch (e) { result = await renderFull(4096); toast('這台裝置記憶體不夠，改用 4096 寬輸出', 3600); }
+    try { result = await renderFull(0, scale); }
+    catch (e) { result = await renderFull(4096, scale); toast('這台裝置記憶體不夠，改用 4096 寬輸出', 3600); }
     $('pct').textContent = '90%';
     let q = 0.95;
     let blob = await toBlobP(result.out, q);
     if (!blob) throw new Error('encode');
-    const fname = `${state.name}-npp${state.preset ? '-' + state.preset.id : ''}${framedNow() ? '-crop' : ''}.jpg`;
+    const fname = `${state.name}-npp${state.preset ? '-' + state.preset.id : ''}${framedNow() ? '-crop' : ''}${scale < 1 ? '-15MP' : ''}.jpg`;
     if (downloadsCap === undefined) downloadsCap = null; /* 保險 */
     if (downloadsCap) {
       while (blob.size > 16 * 1024 * 1024 && q > 0.84) {
@@ -1131,7 +1212,11 @@ function init() {
     $('sZoom').value = 1; $('vZoom').textContent = '1.00×';
     updateCropUI(); renderPreview(); updateMeta();
   });
-  $('btnExport').addEventListener('click', doExport);
+  $('btnExport').addEventListener('click', openSizeSheet);
+  $('btnSizeSmall').addEventListener('click', () => doExport(true));
+  $('btnSizeFull').addEventListener('click', () => doExport(false));
+  $('btnSizeCancel').addEventListener('click', closeSizeSheet);
+  $('sizeSheet').addEventListener('click', e => { if (e.target.id === 'sizeSheet') closeSizeSheet(); });
   $('btnCloseModal').addEventListener('click', () => $('modal').classList.remove('on'));
 
   /* 照片上的手勢：
